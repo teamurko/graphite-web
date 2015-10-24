@@ -9,7 +9,7 @@ from graphite.node import LeafNode, BranchNode
 from graphite.readers import FetchInProgress
 from graphite.logger import log
 from graphite.util import unpickle
-
+from graphite.intervals import IntervalSet, Interval
 
 
 class RemoteStore(object):
@@ -106,11 +106,11 @@ class FindRequest(object):
       cache.set(self.cacheKey, results, settings.FIND_CACHE_DURATION)
 
     for node_info in results:
-      if node_info.get('is_leaf'):
+      if node_info.get('isLeaf'):
         reader = RemoteReader(self.store, node_info, bulk_query=self.query.pattern)
-        node = LeafNode(node_info['path'], reader)
+        node = LeafNode(node_info['metric_path'], reader)
       else:
-        node = BranchNode(node_info['path'])
+        node = BranchNode(node_info['metric_path'])
 
       node.local = False
       yield node
@@ -125,9 +125,9 @@ class RemoteReader(object):
 
   def __init__(self, store, node_info, bulk_query=None):
     self.store = store
-    self.metric_path = node_info['path']
-    self.intervals = node_info['intervals']
-    self.query = bulk_query or node_info['path']
+    self.metric_path = node_info['metric_path']
+    self.intervals = IntervalSet([Interval(*args) for args in node_info['intervals']])
+    self.query = bulk_query or node_info['metric_path']
     self.connection = None
 
   def __repr__(self):
