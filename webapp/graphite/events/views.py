@@ -69,6 +69,7 @@ def get_data(request):
             content_type="application/json")
     return response
 
+
 def fetch(request):
     if request.GET.get("from") is not None:
         time_from = parseATTime(request.GET["from"])
