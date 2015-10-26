@@ -47,10 +47,9 @@ WHISPER_DIR = ''
 RRD_DIR = ''
 STANDARD_DIRS = []
 
-CLUSTER_SERVERS = []
-
 # Cluster settings
 CLUSTER_SERVERS = []
+OPENTSDB_CLUSTER_SERVERS = []
 REMOTE_FIND_TIMEOUT = 3.0
 REMOTE_FETCH_TIMEOUT = 6.0
 REMOTE_RETRY_DELAY = 60.0
@@ -66,7 +65,7 @@ MEMCACHE_HOSTS = []
 MEMCACHE_KEY_PREFIX = ''
 FIND_CACHE_DURATION = 300
 FIND_TOLERANCE = 2 * FIND_CACHE_DURATION
-DEFAULT_CACHE_DURATION = 60 #metric data and graphs are cached for one minute by default
+DEFAULT_CACHE_DURATION = 60  # metric data and graphs are cached for one minute by default
 DEFAULT_CACHE_POLICY = []
 
 LOG_CACHE_PERFORMANCE = False
