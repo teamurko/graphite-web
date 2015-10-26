@@ -17,7 +17,7 @@ from django.conf import settings
 from graphite.compat import HttpResponse, HttpResponseBadRequest
 from graphite.util import getProfile, json
 from graphite.logger import log
-from graphite.storage import STORE
+from graphite.storage import STORE, OPENTSDB_STORE
 from graphite.carbonlink import CarbonLink
 import fnmatch, os
 
@@ -66,7 +66,7 @@ def index_json(request):
 
 
 def find_view(request):
-    "View for finding metrics matching a given pattern"
+    """View for finding metrics matching a given pattern."""
     profile = getProfile(request)
     format = request.REQUEST.get('format', 'treejson')
     local_only = int(request.REQUEST.get('local', 0))
@@ -106,14 +106,19 @@ def find_view(request):
             query = '.'.join(query_parts)
 
     try:
-        matches = list(STORE.find(query, fromTime, untilTime, local=local_only))
+        matches = list(OPENTSDB_STORE.find(query, fromTime, untilTime, local=local_only))
+        log.info("MATCHES: " + str(matches))
     except:
         log.exception()
         raise
 
     log.info('find_view query=%s local_only=%s matches=%d' % (query, local_only, len(matches)))
     matches.sort(key=lambda node: node.name)
-    log.info("received remote find request: pattern=%s from=%s until=%s local_only=%s format=%s matches=%d" % (query, fromTime, untilTime, local_only, format, len(matches)))
+    log.info(
+        ("received remote find request: pattern=%s from=%s until=%s "
+         "local_only=%s format=%s matches=%d") % (
+            query, fromTime, untilTime, local_only, format, len(matches))
+    )
 
     if format == 'treejson':
         content = tree_json(matches, base_path, wildcards=profile.advancedUI or wildcards)
@@ -156,7 +161,7 @@ def expand_view(request):
     results = {}
     for query in request.REQUEST.getlist('query'):
         results[query] = set()
-        for node in STORE.find(query, local=local_only):
+        for node in OPENTSDB_STORE.find(query, local=local_only):
             if node.is_leaf or not leaves_only:
                 results[query].add(node.path)
 

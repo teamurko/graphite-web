@@ -1,6 +1,7 @@
 import socket
 import time
 import httplib
+import json
 from urllib import urlencode
 from threading import Lock, Event
 from django.conf import settings
@@ -10,6 +11,8 @@ from graphite.readers import FetchInProgress
 from graphite.logger import log
 from graphite.util import unpickle
 from graphite.intervals import IntervalSet, Interval
+from graphite import opentsdb
+from graphite import tree
 
 
 class RemoteStore(object):
@@ -28,9 +31,26 @@ class RemoteStore(object):
         self.lastFailure = time.time()
 
 
+class OpenTSDBRemoteStore(object):
+    lastFailure = 0.0
+    available = property(lambda self: time.time() - self.lastFailure > settings.REMOTE_RETRY_DELAY)
+
+    def __init__(self, host):
+        self.host = host
+
+    def find(self, query):
+        log.info("OpenTSDBRemoteStore:find " + str(query))
+        request = OpenTSDBFindRequest(self, query)
+        request.send()
+        return request
+
+    def fail(self):
+        self.lastFailure = time.time()
+
+
 class FindRequest(object):
     __slots__ = ('store', 'query', 'connection',
-                 'failed', 'cacheKey', 'cachedResult')
+                 'failed', 'cache_key', 'cached_result')
 
     def __init__(self, store, query):
         self.store = store
@@ -38,47 +58,53 @@ class FindRequest(object):
         self.connection = None
         self.failed = False
 
-        if query.startTime:
-            start = query.startTime - (query.startTime % settings.FIND_CACHE_DURATION)
+        if query.start_time:
+            start = query.start_time - (query.start_time % settings.FIND_CACHE_DURATION)
         else:
             start = ""
 
-        if query.endTime:
-            end = query.endTime - (query.endTime % settings.FIND_CACHE_DURATION)
+        if query.end_time:
+            end = query.end_time - (query.end_time % settings.FIND_CACHE_DURATION)
         else:
             end = ""
 
-        self.cacheKey = "find:%s:%s:%s:%s" % (store.host, query.pattern, start, end)
-        self.cachedResult = None
+        self.cache_key = "find:%s:%s:%s:%s" % (store.host, query.pattern, start, end)
+        self.cached_result = None
 
     def send(self):
         log.info("FindRequest.send(host=%s, query=%s) called" % (self.store.host, self.query))
 
-        self.cachedResult = cache.get(self.cacheKey)
-        if self.cachedResult is not None:
-            log.info("FindRequest(host=%s, query=%s) using cached result" % (self.store.host, self.query))
+        self.cached_result = cache.get(self.cache_key)
+        if self.cached_result is not None:
+            log.info(
+                "FindRequest(host=%s, query=%s) using cached result" % (
+                    self.store.host, self.query)
+            )
             return
 
         self.connection = HTTPConnectionWithTimeout(self.store.host)
         self.connection.timeout = settings.REMOTE_FIND_TIMEOUT
 
         query_params = [
-          ('local', '1'),
-          ('format', 'pickle'),
-          ('query', self.query.pattern),
+            ('local', '1'),
+            ('format', 'pickle'),
+            ('query', self.query.pattern),
         ]
-        if self.query.startTime:
-            query_params.append(('from', self.query.startTime))
+        if self.query.start_time:
+            query_params.append(('from', self.query.start_time))
 
-        if self.query.endTime:
-            query_params.append(('until', self.query.endTime))
+        if self.query.end_time:
+            query_params.append(('until', self.query.end_time))
 
         query_string = urlencode(query_params)
 
         try:
             self.connection.request('GET', '/metrics/find/?' + query_string)
         except:
-            log.exception("FindRequest.send(host=%s, query=%s) exception during request" % (self.store.host, self.query))
+            log.exception(
+                "FindRequest.send(host=%s, query=%s) exception during request" % (
+                    self.store.host, self.query)
+            )
             self.store.fail()
             self.failed = True
 
@@ -86,28 +112,71 @@ class FindRequest(object):
         if self.failed:
             return
 
-        if self.cachedResult is not None:
-            results = self.cachedResult
+        if self.cached_result is not None:
+            results = self.cached_result
         else:
             if self.connection is None:
                 self.send()
 
             try:
                 response = self.connection.getresponse()
-                assert response.status == 200, "received error response %s - %s" % (response.status, response.reason)
+                assert response.status == 200, "received error response %s - %s" % (
+                    response.status, response.reason)
                 result_data = response.read()
                 results = unpickle.loads(result_data)
 
             except:
-                log.exception("FindRequest.get_results(host=%s, query=%s) exception processing response" % (self.store.host, self.query))
+                log.exception(
+                    "FindRequest.get_results(host=%s, query=%s) exception processing response" % (
+                        self.store.host, self.query)
+                )
                 self.store.fail()
                 return
 
-            cache.set(self.cacheKey, results, settings.FIND_CACHE_DURATION)
+            cache.set(self.cache_key, results, settings.FIND_CACHE_DURATION)
 
         for node_info in results:
             if node_info.get('isLeaf'):
                 reader = RemoteReader(self.store, node_info, bulk_query=self.query.pattern)
+                node = LeafNode(node_info['metric_path'], reader)
+            else:
+                node = BranchNode(node_info['metric_path'])
+
+            node.local = False
+            yield node
+
+
+class OpenTSDBFindRequest(object):
+    __slots__ = ('store', 'query')
+
+    def __init__(self, store, query):
+        self.store = store
+        self.query = query
+
+    def _query_prefix(self):
+        return self.query.pattern.replace('*', '')
+
+    def send(self):
+        pass
+
+    def get_results(self):
+        client = opentsdb.API(self.store.host)
+        try:
+            results = tree.OpenTSDBMetricsMeta(client).find(self._query_prefix())
+        except:
+            log.exception(
+                "OpenTSDBFindRequest.get_results(host=%s, query=%s) exception processing response" % (
+                    self.store.host, self.query)
+            )
+            self.store.fail()
+            return
+
+        # cache.set(self.cache_key, results, settings.FIND_CACHE_DURATION)
+
+        log.info("RESULTS: " + str(results))
+        for node_info in results:
+            if node_info.get('isLeaf'):
+                reader = OpenTSDBRemoteReader(self.store, node_info, bulk_query=self.query.pattern)
                 node = LeafNode(node_info['metric_path'], reader)
             else:
                 node = BranchNode(node_info['metric_path'])
@@ -136,14 +205,14 @@ class RemoteReader(object):
     def get_intervals(self):
         return self.intervals
 
-    def fetch(self, startTime, endTime):
+    def fetch(self, start_time, end_time):
         query_params = [
-          ('target', self.query),
-          ('format', 'pickle'),
-          ('local', '1'),
-          ('noCache', '1'),
-          ('from', str(int(startTime))),
-          ('until', str(int(endTime)))
+            ('target', self.query),
+            ('format', 'pickle'),
+            ('local', '1'),
+            ('noCache', '1'),
+            ('from', str(int(start_time))),
+            ('until', str(int(end_time)))
         ]
         query_string = urlencode(query_params)
         urlpath = '/render/?' + query_string
@@ -239,6 +308,36 @@ class RemoteReader(object):
             self.cache_lock.release()
 
 
+class OpenTSDBRemoteReader(object):
+    __slots__ = ('store', 'metric_path', 'intervals', 'query')
+    request_times = {}
+
+    def __init__(self, store, node_info, bulk_query=None):
+        self.store = store
+        self.metric_path = node_info['metric_path']
+        self.query = bulk_query or node_info['metric_path']
+
+    def __repr__(self):
+        return '<RemoteReader[%x]: %s>' % (id(self), self.store.host)
+
+    def get_intervals(self):
+        return IntervalSet([Interval(float("-inf"), float("inf"))])
+
+    def fetch(self, start_time, end_time):
+        log.info("FETCH: " + str(start_time) + ", " + str(end_time))
+        api = opentsdb.API(self.store.host)
+        results = api.query(self.metric_path, start_time, end_time)
+        log.info("RESULTS: %s" % results)
+        def _extract_my_results():
+            for series in results:
+                log.info("SERIES: %s" % series)
+                if series['name'] == self.metric_path:
+                    time_info = (series['start'], series['end'], series['step'])
+                    return (time_info, series['values'])
+
+        return FetchInProgress(_extract_my_results)
+
+
 # This is a hack to put a timeout in the connect() of an HTTP request.
 # Python 2.6 supports this already, but many Graphite installations
 # are not on 2.6 yet.
@@ -253,7 +352,8 @@ class HTTPConnectionWithTimeout(httplib.HTTPConnection):
             try:
                 self.sock = socket.socket(af, socktype, proto)
                 try:
-                    self.sock.settimeout(float(self.timeout)) # default self.timeout is an object() in 2.6
+                    # default self.timeout is an object() in 2.6
+                    self.sock.settimeout(float(self.timeout))
                 except:
                     pass
                 self.sock.connect(sa)
