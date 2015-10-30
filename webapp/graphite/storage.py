@@ -174,7 +174,7 @@ class OpenTSDBStore(object):
 
         for path, nodes in nodes_by_path.iteritems():
             leaf_nodes = []
-
+            log.info("OpenTSDBStore:find path %s, leaf_nodes %s" % (path, nodes))
             # First we dispense with the BranchNodes
             for node in nodes:
                 if node.is_leaf:
@@ -237,7 +237,7 @@ class OpenTSDBStore(object):
                 best_candidate = min(leaf_nodes, key=distance_to_requested_interval)
                 if distance_to_requested_interval(best_candidate) <= settings.FIND_TOLERANCE:
                     minimal_node_set.add(best_candidate)
-
+            log.info("OpenTSDBStore:find " + str(minimal_node_set))
             if len(minimal_node_set) == 1:
                 yield minimal_node_set.pop()
             elif len(minimal_node_set) > 1:

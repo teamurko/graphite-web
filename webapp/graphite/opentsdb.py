@@ -8,6 +8,8 @@ import httplib
 import httplib2
 import json
 
+from graphite.logger import log
+
 
 class API(object):
     def __init__(self, host_with_port):
@@ -49,4 +51,6 @@ class API(object):
             self.query_url, 'POST', headers=self.headers, body=json.dumps(body))
         if int(response['status']) != httplib.OK:
             raise Exception("Could not read data points: %s" % repr(response))
+        log.info("BODY: " + json.dumps(body))
+        log.info("QUERY OPENTSDB: " + str(content)[:100])
         return json.loads(content)

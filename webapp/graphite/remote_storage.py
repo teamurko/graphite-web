@@ -154,7 +154,7 @@ class OpenTSDBFindRequest(object):
         self.query = query
 
     def _query_prefix(self):
-        return self.query.pattern.replace('*', '')
+        return self.query.pattern
 
     def send(self):
         pass
@@ -323,17 +323,30 @@ class OpenTSDBRemoteReader(object):
     def get_intervals(self):
         return IntervalSet([Interval(float("-inf"), float("inf"))])
 
+    def _make_time_info(self, ts):
+        dps = ts['dps']
+        timestamps = map(int, dps.keys())
+        start_time = min(timestamps)
+        end_time = max(timestamps)
+        step = (end_time - start_time) / len(timestamps)
+        return (start_time, end_time, step)
+
+    def _make_values(self, ts):
+        return [item[1] for item in sorted(ts['dps'].items())]
+
     def fetch(self, start_time, end_time):
         log.info("FETCH: " + str(start_time) + ", " + str(end_time))
         api = opentsdb.API(self.store.host)
         results = api.query(self.metric_path, start_time, end_time)
-        log.info("RESULTS: %s" % results)
+        log.info("RESULTS: %s" % str(results)[:100])
         def _extract_my_results():
             for series in results:
-                log.info("SERIES: %s" % series)
-                if series['name'] == self.metric_path:
-                    time_info = (series['start'], series['end'], series['step'])
-                    return (time_info, series['values'])
+                log.info("SERIES: %s" % series.keys())
+                if series['metric'] == self.metric_path:
+                    time_info = self._make_time_info(series)
+                    data = (time_info, self._make_values(series))
+                    log.info("DATA: " + str(data)[:400])
+                    return data
 
         return FetchInProgress(_extract_my_results)
 

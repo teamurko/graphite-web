@@ -22,33 +22,59 @@ class OpenTSDBMetricsMeta(object):
 
         """
         log.info("OpenTSDBMetricsMeta.find(%s)" % path)
-        node_names = filter(None, path.split('.'))
-        current_branch = self.api.branch()
+        node_names = path.split('.')
+        if node_names[-1] == '*':
+            node_names.pop()
+        log.info("PATH: " + str(node_names))
+        current_branches = [self.api.branch()]
         depth = 0
+        leaves = []
         for node_name in node_names:
-            branches = current_branch['branches'] or []
-            next_branch_id = None
+            log.info("Node: " + str(node_name))
+            log.info("Cur branch: " + str(current_branches))
+            next_branch_ids = []
             depth += 1
-            for branch in branches:
-                if self._branch_current_node_name(branch) == node_name:
-                    next_branch_id = branch['branchId']
-                    break
-            if next_branch_id is None:
-                return []
-            current_branch = self.api.branch(branch_id=next_branch_id)
-        log.info("CURRENT BRANCH: %s" % current_branch)
+            # leaves should be at the end of the path
+            leaves = []
+            for current_branch in current_branches:
+                for branch in current_branch['branches'] or []:
+                    if node_name == '*' or self._branch_current_node_name(branch) == node_name:
+                        next_branch_ids.append(branch['branchId'])
+                for leaf in current_branch['leaves'] or []:
+                    leaves.append(leaf)
+            log.info("next_branch_ids: " + str(next_branch_ids))
+
+            current_branches = []
+
+            for next_branch_id in next_branch_ids:
+                current_branches.append(self.api.branch(branch_id=next_branch_id))
+
+        log.info("CURRENT BRANCHES: %s" % current_branches)
         result = []
-        for branch in current_branch['branches'] or []:
+        for current_branch in current_branches:
+            for branch in current_branch['branches'] or []:
+                result.append(
+                    {
+                        "metric_path": ".".join(
+                            node_names + [self._branch_current_node_name(branch)]),
+                        "isLeaf": False
+                    }
+                )
+            for leaf in current_branch['leaves'] or []:
+                result.append(
+                    {
+                        "metric_path": leaf['metric'],
+                        "isLeaf": True
+                    }
+                )
+        for leaf in leaves:
+            log.info("LEAF: " + str(leaf))
+            last_token = path.rsplit('.', 1)[-1]
+            if last_token and leaf['displayName'] != last_token:
+                continue
             result.append(
                 {
-                    "metric_path": ".".join(node_names + [self._branch_current_node_name(branch)]),
-                    "isLeaf": False
-                }
-            )
-        for leave in current_branch['leaves'] or []:
-            result.append(
-                {
-                    "metric_path": leave['metric'],
+                    "metric_path": leaf["metric"],
                     "isLeaf": True
                 }
             )
